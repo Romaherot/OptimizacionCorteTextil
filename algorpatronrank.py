@@ -1,4 +1,5 @@
 ﻿import copy
+import math
 import matplotlib.pyplot as plt
 import shapely.plotting
 import numpy as np
@@ -161,55 +162,26 @@ def plot_margin_snapshots(snapshots, width=900):
     plt.show()
 
 
-def get_margin_position_bounds(polygon, x_bounds, y_bounds):
-    """Return valid x/y centroid ranges for a polygon inside the bounding area."""
-    poly_minx, poly_miny, poly_maxx, poly_maxy = polygon.bounds
-    center = polygon.centroid
-    min_x = x_bounds[0] - (center.x - poly_minx)
-    max_x = x_bounds[1] - (center.x - poly_maxx)
-    min_y = y_bounds[0] - (center.y - poly_miny)
-    max_y = y_bounds[1] - (center.y - poly_maxy)
-    return min_x, max_x, min_y, max_y
+def create_margin_population(size, margin_polygons, x_bounds, y_bounds):
+    """Create a population of individuals with random x/y for each margin polygon.
 
-
-def create_margin_population(size, margin_polygons, x_bounds, y_bounds, max_individual_attempts=500, max_placement_attempts=200):
-    """Create a population of valid individuals with non-overlapping in-bounds margin polygons."""
+    Y values are biased toward lower positions using a quadratic transform
+    so the initial population tends to start closer to the bottom of the
+    rectangle (encourages smaller initial `max_y`)."""
     population = []
-    width = x_bounds[1]
+    ymin, ymax = y_bounds
     for _ in range(size):
-        for attempt in range(max_individual_attempts):
-            individual = []
-            valid = True
-            for entry in margin_polygons:
-                polygon = entry.get("polygon")
-                name = entry.get("name")
-                min_x, max_x, min_y, max_y = get_margin_position_bounds(polygon, x_bounds, y_bounds)
-                if min_x > max_x or min_y > max_y:
-                    valid = False
-                    break
-
-                placement_found = False
-                for _ in range(max_placement_attempts):
-                    x = random.uniform(min_x, max_x)
-                    t = random.random()
-                    y = min_y + (t * t) * (max_y - min_y)
-                    candidate = {"name": name, "polygon": polygon, "x": x, "y": y}
-                    if score_margin_positions(individual + [candidate], x_bounds, y_bounds) > -30000000000:
-                        individual.append(candidate)
-                        placement_found = True
-                        break
-
-                if not placement_found:
-                    valid = False
-                    break
-
-            if valid and score_margin_positions(individual, x_bounds, y_bounds) > -30000000000:
-                population.append(individual)
-                break
-        else:
-            raise RuntimeError(
-                f"Unable to generate a valid starting individual after {max_individual_attempts} attempts"
-            )
+        individual = []
+        for entry in margin_polygons:
+            # bias y toward lower values: square of uniform in [0,1]
+            y_val = ymin + (random.random() ** 2) * (ymax - ymin)
+            individual.append({
+                "name": entry.get("name"),
+                "polygon": entry.get("polygon"),
+                "x": random.uniform(x_bounds[0], x_bounds[1]),
+                "y": y_val,
+            })
+        population.append(individual)
     return population
 
 
@@ -235,24 +207,67 @@ def crossover_margin_individuals(parent1, parent2, alpha=None):
 
 def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
                              x_bounds=(0, 900), y_bounds=(0, 900),
-                             mutation_scale_x=50, mutation_scale_y_pos=50, mutation_scale_y_neg=50):
+                             mutation_scale_x=50, mutation_scale_y_pos=50, mutation_scale_y_neg=50,
+                             downward_mutation_factor=2.0):
     """Randomly perturb x and y independently per margin polygon.
 
     Each coordinate has its own mutation probability and scale.
-    The y-direction supports separate positive and negative scales,
-    and the negative scale is amplified for higher current y values.
+    The y-direction supports separate positive and negative scales.
+    Mutation scales increase when a polygon has open space from borders or
+    other polygons, allowing aggressive exploration for isolated pieces.
     """
     mutated = []
     y_max = max(y_bounds[1], 1.0)
+
+    def bbox_dist(a, b):
+        dx = max(b[0] - a[2], a[0] - b[2], 0.0)
+        dy = max(b[1] - a[3], a[1] - b[3], 0.0)
+        return math.hypot(dx, dy)
+
+    # Precompute current moved bounds for neighbor distance estimation.
+    moved_bounds = []
     for gene in individual:
+        poly = gene["polygon"]
+        center = poly.centroid
+        dx = gene["x"] - center.x
+        dy = gene["y"] - center.y
+        poly_minx, poly_miny, poly_maxx, poly_maxy = poly.bounds
+        moved_bounds.append((poly_minx + dx, poly_miny + dy, poly_maxx + dx, poly_maxy + dy))
+
+    max_space = max(x_bounds[1] - x_bounds[0], y_bounds[1] - y_bounds[0])
+    for idx, gene in enumerate(individual):
         new_x = gene["x"]
         new_y = gene["y"]
+        minx, miny, maxx, maxy = moved_bounds[idx]
+
+        border_dist = min(
+            minx - x_bounds[0],
+            x_bounds[1] - maxx,
+            miny - y_bounds[0],
+            y_bounds[1] - maxy,
+        )
+        border_dist = max(border_dist, 0.0)
+
+        nearest_dist = float("inf")
+        other_indices = list(range(len(moved_bounds)))
+        other_indices.remove(idx)
+        if len(other_indices) > 20:
+            other_indices = random.sample(other_indices, 20)
+        for j in other_indices:
+            nearest_dist = min(nearest_dist, bbox_dist((minx, miny, maxx, maxy), moved_bounds[j]))
+        nearest_dist = 0.0 if nearest_dist == float("inf") else nearest_dist
+
+        space_score = max(border_dist, nearest_dist)
+        scale_multiplier = 1.0 + min(space_score / max_space, 1.0) * 2.0
+
         if random.random() < mutation_rate_x:
-            new_x += random.uniform(-mutation_scale_x, mutation_scale_x)
+            local_x_scale = mutation_scale_x * scale_multiplier
+            new_x += random.uniform(-local_x_scale, local_x_scale)
             new_x = max(min(new_x, x_bounds[1]), x_bounds[0])
         if random.random() < mutation_rate_y:
-            neg_scale = mutation_scale_y_neg * (gene["y"] / (y_max))
-            new_y += random.uniform(-neg_scale, mutation_scale_y_pos)
+            local_y_pos_scale = mutation_scale_y_pos * scale_multiplier
+            local_y_neg_scale = downward_mutation_factor * mutation_scale_y_neg * (gene["y"] / y_max) * scale_multiplier
+            new_y += random.uniform(-local_y_neg_scale, local_y_pos_scale)
             new_y = max(min(new_y, y_bounds[1]), y_bounds[0])
         mutated.append({
             "name": gene.get("name"),
@@ -263,30 +278,12 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
     return mutated
 
 
-def compute_average_centroid_distance(polygons):
-    """Compute the average pairwise distance between polygon centroids."""
-    centers = [poly.centroid for poly in polygons]
-    n = len(centers)
-    if n <= 1:
-        return 0.0
-
-    total = 0.0
-    count = 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            dx = centers[i].x - centers[j].x
-            dy = centers[i].y - centers[j].y
-            total += (dx * dx + dy * dy) ** 0.5
-            count += 1
-    return total / max(count, 1)
-
-
-def score_margin_positions(margin_params, x_bounds=(0, 900), y_bounds=(0, 900)):
+def score_margin_positions(margin_params, width=900):
     """Translate copies of margin polygons to x/y centers and score placement.
 
-    Scoring:
-    - Penalizes intersections and out-of-bounds with -30000000000
-    - Rewards valid placements closer to y=0, lower height, and more compact clusters
+    Scoring: 
+    - Penalizes intersections and out-of-bounds with -300000
+    - Rewards valid placements with -max_y (lower height = higher score)
     """
     moved_polygons = []
     for entry in margin_params:
@@ -297,61 +294,43 @@ def score_margin_positions(margin_params, x_bounds=(0, 900), y_bounds=(0, 900)):
         moved = translate(poly, xoff=x_offset, yoff=y_offset)
         moved_polygons.append(moved)
 
-    # Check for illegal overlaps but allow boundary touches
+    # Check for intersections
     for i, poly_a in enumerate(moved_polygons):
         for poly_b in moved_polygons[i + 1 :]:
-            if poly_a.intersects(poly_b) and poly_a.intersection(poly_b).area > 1e-8:
+            if poly_a.intersects(poly_b):
                 return -30000000000
 
-    # Check bounds and calculate metrics
-    min_y = float("inf")
-    max_y = float("-inf")
-    touch_y0_count = 0
-    touch_pair_count = 0
-    min_x_allowed, min_y_allowed = x_bounds[0], y_bounds[0]
-    max_x_allowed, max_y_allowed = x_bounds[1], y_bounds[1]
-    individual_y0_distances = []
+    # Check bounds and find max_y
+    max_y = 0
     for poly in moved_polygons:
         minx, miny, maxx, maxy = poly.bounds
-        if minx < min_x_allowed or miny < min_y_allowed or maxx > max_x_allowed or maxy > max_y_allowed:
+        if minx < 0 or miny < 0 or maxx > width:
             return -30000000000
-        if abs(miny - min_y_allowed) < 1e-8:
-            touch_y0_count += 1
-        min_y = min(min_y, miny)
         max_y = max(max_y, maxy)
-        individual_y0_distances.append(miny - min_y_allowed)
 
-    for i, poly_a in enumerate(moved_polygons):
-        for poly_b in moved_polygons[i + 1 :]:
-            if poly_a.touches(poly_b):
-                touch_pair_count += 1
-
-    avg_dist = compute_average_centroid_distance(moved_polygons)
-    compactness_weight = 0.2
-    individual_y0_weight = 50.0
-    max_height_weight = 120.0
-    y0_touch_bonus = 100.0
-    pair_touch_bonus = 1.0
-
-    # Valid placement: reward each polygon for being close to y=0, compact clustering, and low overall height
-    score = -sum(individual_y0_distances) * individual_y0_weight - max_y * max_height_weight - compactness_weight * avg_dist
-    score += y0_touch_bonus * touch_y0_count
-    score += pair_touch_bonus * touch_pair_count
-    return score
+    # Valid placement: reward lower max_y
+    return -max_y
 
 
-def selection(population, fitnesses, tournament_size):
-    """Select parents via tournament selection and return deep copies of winners.
 
-    This works for both simple tuples and nested individuals such as lists of
-    margin parameter dictionaries.
+def selection(population, fitnesses, tournament_size=3, selection_pressure=1.0):
+    """Select parents via ranking selection and return deep copies of winners.
+
+    Individuals are ranked by fitness, then selected with probability
+    proportional to their rank. The best individual receives the highest
+    selection weight.
     """
-    selected = []
-    for _ in range(len(population)):
-        tournament = random.sample(list(zip(population, fitnesses)), tournament_size)
-        winner = max(tournament, key=lambda x: x[1])[0]
-        selected.append(copy.deepcopy(winner))
-    return selected
+    if not population:
+        return []
+
+    ranked_pairs = sorted(zip(population, fitnesses), key=lambda x: x[1], reverse=True)
+    ranked_population = [pair[0] for pair in ranked_pairs]
+    n = len(ranked_population)
+    # apply selection pressure: higher values increase bias toward top ranks
+    weights = [((n - idx) ** selection_pressure) for idx in range(n)]
+
+    selected = random.choices(ranked_population, weights=weights, k=n)
+    return [copy.deepcopy(ind) for ind in selected]
 
 
 def compute_diversity_metrics(population, fitnesses, sample_limit=200):
@@ -415,7 +394,9 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
                                        population_size, generations, 
                                        mutation_rate_x, mutation_rate_y,
                                        mutation_scale_x, mutation_scale_y_pos, mutation_scale_y_neg,
-                                       tournament_size, crossover_prob, width):
+                                       tournament_size, crossover_prob, width,
+                                       selection_pressure=1.5,
+                                       downward_mutation_factor=2.5):
     """Run a genetic algorithm to optimize margin polygon placement.
     
     All parameters must be provided by the caller.
@@ -428,7 +409,7 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
     
     snapshots = []
     for generation in range(generations):
-        fitnesses = [score_margin_positions(ind, x_bounds, y_bounds) for ind in population]
+        fitnesses = [score_margin_positions(ind, width) for ind in population]
 
         # Diversity metrics
         metrics = compute_diversity_metrics(population, fitnesses)
@@ -442,14 +423,10 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
               f"uniq_inds={metrics['unique_individuals_count']} "
               f"avg_dist={metrics['avg_pairwise_distance']:.2f}")
 
-        if best_individual is not None and (
-            generation == 0
-            or (generation & (generation - 1)) == 0
-            or generation == generations - 1
-        ):
+        if generation % 50 == 0 and best_individual is not None:
             snapshots.append((generation, copy.deepcopy(best_individual)))
         
-        parents = selection(population, fitnesses, tournament_size)
+        parents = selection(population, fitnesses, tournament_size, selection_pressure)
         # Shuffle parents to avoid deterministic pairing of identical parents
         random.shuffle(parents)
 
@@ -463,21 +440,13 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
                 if i + 1 < len(parents):
                     offspring.append(copy.deepcopy(parents[i+1]))
         
-        # Elitism: keep the top 3 individuals unmutated (or fewer if population is small)
-        elite_count = min(3, population_size)
-        # find top elite_count indices by fitness
-        sorted_idx = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
-        elite_idx = sorted_idx[:elite_count]
-        elites = [copy.deepcopy(population[i]) for i in elite_idx]
-
-        # Mutate the rest of offspring to fill the population
-        num_to_mutate = population_size - len(elites)
+        # Elitism: keep the best individual unmutated
         mutated_offspring = [mutate_margin_individual(ind, mutation_rate_x, mutation_rate_y,
                      x_bounds, y_bounds,
-                     mutation_scale_x, mutation_scale_y_pos, mutation_scale_y_neg)
-                 for ind in offspring[:num_to_mutate]]
-
-        population = elites + mutated_offspring
+                     mutation_scale_x, mutation_scale_y_pos, mutation_scale_y_neg,
+                     downward_mutation_factor)
+                 for ind in offspring[:population_size - 1]]
+        population = [copy.deepcopy(population[gen_best_idx])] + mutated_offspring
     
     return best_individual, best_fitness, snapshots
 
@@ -497,16 +466,18 @@ if __name__ == "__main__":
     x_bounds = (0, width)
     
     # GA parameters
-    population_size = 100
+    population_size = 200
     generations = 600
     # Independent mutation rates and scales for x and y
-    mutation_rate_x = 0.5
-    mutation_rate_y = 0.99
-    mutation_scale_x = 200
-    mutation_scale_y_pos = 1
-    mutation_scale_y_neg = 500
+    mutation_rate_x = 0.4
+    mutation_rate_y = 0.95
+    mutation_scale_x = 150
+    mutation_scale_y_pos = 5
+    mutation_scale_y_neg = 2000
     tournament_size = 20
-    crossover_prob = 0.9
+    crossover_prob = 0.95
+    selection_pressure = 1.8
+    downward_mutation_factor = 3.0
     
     # Run GA
     best_individual, best_fitness, snapshots = genetic_algorithm_margin_placement(
@@ -523,7 +494,9 @@ if __name__ == "__main__":
         mutation_scale_y_neg=mutation_scale_y_neg,
         tournament_size=tournament_size,
         crossover_prob=crossover_prob,
-        width=width
+        width=width,
+        selection_pressure=selection_pressure,
+        downward_mutation_factor=downward_mutation_factor
     )
     
     print(f"\nBest fitness: {best_fitness}")

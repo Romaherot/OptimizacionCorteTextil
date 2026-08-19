@@ -67,7 +67,7 @@ def plot_rectangle(rectangle, color="blue", alpha=0.5):
     plt.show()
 
 
-def plot_margin_individual(individual, width=900):
+def plot_margin_individual(individual, width=900, title=None):
     """Plot an individual's margin polygon placements over a bounding box.
     
     Blue box: width 900, height determined by the max y of all moved polygons.
@@ -106,11 +106,59 @@ def plot_margin_individual(individual, width=900):
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlim(-50, width + 50)
     ax.set_ylim(-50, max_y + 50)
-    plt.title("Margin Polygon Placement")
+    plt.title(title or "Margin Polygon Placement")
     plt.xlabel("X")
     plt.ylabel("Y")
     plt.show()
 
+
+def plot_margin_snapshots(snapshots, width=900):
+    """Plot saved best individuals for stored generation snapshots side-by-side.
+
+    Each saved generation is drawn in its own subplot with a shared axis range
+    so placements can be compared visually.
+    """
+    if not snapshots:
+        return
+
+    snapshot_polygons = []
+    all_bounds = []
+    for generation, individual in snapshots:
+        moved_polygons = []
+        for entry in individual:
+            poly = entry["polygon"]
+            center = poly.centroid
+            x_offset = entry["x"] - center.x
+            y_offset = entry["y"] - center.y
+            moved = translate(poly, xoff=x_offset, yoff=y_offset)
+            moved_polygons.append(moved)
+            all_bounds.append(moved.bounds)
+        snapshot_polygons.append((generation, moved_polygons))
+
+    # determine common bounds
+    max_y = max(b[3] for b in all_bounds)
+
+    n = len(snapshot_polygons)
+    fig_w = max(4 * n, 8)
+    fig, axes = plt.subplots(1, n, figsize=(fig_w, 8), squeeze=False)
+    axes = axes[0]
+
+    box = Polygon([(0, 0), (width, 0), (width, max_y), (0, max_y)])
+
+    colors = [plt.cm.viridis(v) for v in np.linspace(0, 1, n)]
+    for ax, (generation, moved_polygons), color in zip(axes, snapshot_polygons, colors):
+        shapely.plotting.plot_polygon(box, ax=ax, color="blue", alpha=0.2, edgecolor="blue", linewidth=1)
+        for poly in moved_polygons:
+            shapely.plotting.plot_polygon(poly, ax=ax, color=color, alpha=0.6, edgecolor=color, linewidth=0.5)
+        ax.set_title(f"Gen {generation}")
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_xlim(-50, width + 50)
+        ax.set_ylim(-50, max_y + 50)
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+
+    plt.tight_layout()
+    plt.show()
 
 
 def create_margin_population(size, margin_polygons, x_bounds, y_bounds):
@@ -151,12 +199,15 @@ def crossover_margin_individuals(parent1, parent2, alpha=None):
 
 def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
                              x_bounds=(0, 900), y_bounds=(0, 900),
-                             mutation_scale_x=50, mutation_scale_y=50):
+                             mutation_scale_x=50, mutation_scale_y_pos=50, mutation_scale_y_neg=50):
     """Randomly perturb x and y independently per margin polygon.
 
     Each coordinate has its own mutation probability and scale.
+    The y-direction supports separate positive and negative scales,
+    and the negative scale is amplified for higher current y values.
     """
     mutated = []
+    y_max = max(y_bounds[1], 1.0)
     for gene in individual:
         new_x = gene["x"]
         new_y = gene["y"]
@@ -164,7 +215,8 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
             new_x += random.uniform(-mutation_scale_x, mutation_scale_x)
             new_x = max(min(new_x, x_bounds[1]), x_bounds[0])
         if random.random() < mutation_rate_y:
-            new_y += random.uniform(-mutation_scale_y, mutation_scale_y)
+            neg_scale = mutation_scale_y_neg * (gene["y"] / y_max)
+            new_y += random.uniform(-neg_scale, mutation_scale_y_pos)
             new_y = max(min(new_y, y_bounds[1]), y_bounds[0])
         mutated.append({
             "name": gene.get("name"),
@@ -283,18 +335,19 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
                                        x_bounds, y_bounds,
                                        population_size, generations, 
                                        mutation_rate_x, mutation_rate_y,
-                                       mutation_scale_x, mutation_scale_y,
+                                       mutation_scale_x, mutation_scale_y_pos, mutation_scale_y_neg,
                                        tournament_size, crossover_prob, width):
     """Run a genetic algorithm to optimize margin polygon placement.
     
     All parameters must be provided by the caller.
-    Returns a tuple of (best_individual, best_fitness).
+    Returns a tuple of (best_individual, best_fitness, snapshots).
     """
     population = create_margin_population(population_size, margin_polygons, x_bounds, y_bounds)
     
     best_individual = None
     best_fitness = float('-inf')
     
+    snapshots = []
     for generation in range(generations):
         fitnesses = [score_margin_positions(ind, width) for ind in population]
 
@@ -309,6 +362,9 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
               f"uniq_fit={metrics['unique_fitness_count']} "
               f"uniq_inds={metrics['unique_individuals_count']} "
               f"avg_dist={metrics['avg_pairwise_distance']:.2f}")
+
+        if generation % 50 == 0 and best_individual is not None:
+            snapshots.append((generation, copy.deepcopy(best_individual)))
         
         parents = selection(population, fitnesses, tournament_size)
         # Shuffle parents to avoid deterministic pairing of identical parents
@@ -327,11 +383,11 @@ def genetic_algorithm_margin_placement(margin_polygons, rectangle,
         # Elitism: keep the best individual unmutated
         mutated_offspring = [mutate_margin_individual(ind, mutation_rate_x, mutation_rate_y,
                                  x_bounds, y_bounds,
-                                 mutation_scale_x, mutation_scale_y)
+                                 mutation_scale_x, mutation_scale_y_pos, mutation_scale_y_neg)
                      for ind in offspring[:population_size - 1]]
         population = [copy.deepcopy(population[gen_best_idx])] + mutated_offspring
     
-    return best_individual, best_fitness
+    return best_individual, best_fitness, snapshots
 
 
 
@@ -349,18 +405,19 @@ if __name__ == "__main__":
     x_bounds = (0, width)
     
     # GA parameters
-    population_size = 150
-    generations = 1000
+    population_size = 120
+    generations = 300
     # Independent mutation rates and scales for x and y
-    mutation_rate_x = 0.9
+    mutation_rate_x = 0.5
     mutation_rate_y = 0.9
     mutation_scale_x = 200
-    mutation_scale_y = 500
-    tournament_size = 5
+    mutation_scale_y_pos = 10
+    mutation_scale_y_neg = 500
+    tournament_size = 20
     crossover_prob = 0.9
     
     # Run GA
-    best_individual, best_fitness = genetic_algorithm_margin_placement(
+    best_individual, best_fitness, snapshots = genetic_algorithm_margin_placement(
         margin_polygons, 
         rectangle,
         x_bounds=x_bounds,
@@ -370,7 +427,8 @@ if __name__ == "__main__":
         mutation_rate_x=mutation_rate_x,
         mutation_rate_y=mutation_rate_y,
         mutation_scale_x=mutation_scale_x,
-        mutation_scale_y=mutation_scale_y,
+        mutation_scale_y_pos=mutation_scale_y_pos,
+        mutation_scale_y_neg=mutation_scale_y_neg,
         tournament_size=tournament_size,
         crossover_prob=crossover_prob,
         width=width
@@ -379,6 +437,7 @@ if __name__ == "__main__":
     print(f"\nBest fitness: {best_fitness}")
     print(f"Best individual: {best_individual[:3]}")  # Show first 3 margin positions
     
-    # Plot the best individual
-    plot_margin_individual(best_individual, width=width)
+    # Plot the best individual and saved snapshots
+    plot_margin_individual(best_individual, width=width, title="Final best individual")
+    plot_margin_snapshots(snapshots, width=width)
     
