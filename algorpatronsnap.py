@@ -675,6 +675,26 @@ if __name__ == "__main__":
     print(f"\nBest fitness: {best_fitness}")
     print(f"Best individual: {best_individual[:3]}")  # Show first 3 margin positions
     
+    # Save best individual to file
+    import json
+    best_individual_data = []
+    for entry in best_individual:
+        best_individual_data.append({
+            "name": entry.get("name"),
+            "x": float(entry.get("x")),
+            "y": float(entry.get("y")),
+            "simetrico": entry.get("polygon").is_ring if entry.get("polygon") else False,
+        })
+    
+    with open("best_individual.json", "w", encoding="utf-8") as f:
+        json.dump({
+            "fitness": best_fitness,
+            "max_y": float(_individual_max_y(best_individual)),
+            "placements": best_individual_data,
+        }, f, indent=2, ensure_ascii=False)
+    
+    print(f"Best individual saved to best_individual.json")
+    
     # Plot the best individual and saved snapshots
     plot_margin_individual(best_individual, width=width, title="Final best individual")
     plot_margin_snapshots(snapshots, width=width)
