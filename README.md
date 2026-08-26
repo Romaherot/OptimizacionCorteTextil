@@ -1,11 +1,13 @@
 Objetivo del programa: Encontrar la forma más eficiente de ordenar y posicionar patrones en un lienzo, de forma tal que se use la menor cantidad posible de tela
+
 Utilización:
-Abrir OptCorteTextil
-Crear polígonos en base a los patrones de ropa a crear
-Transformar a patrones y señalar la cantidad de patrones para añadir al lienzo
-Añadir al lienzo y encontrar la posible mejor posición para los patrones seleccionados
+1) Abrir OptCorteTextil
+2) Crear polígonos en base a los patrones de ropa a crear
+3) Transformar a patrones y señalar la cantidad de patrones para añadir al lienzo
+4) Añadir al lienzo y encontrar la posible mejor posición para los patrones seleccionados
 
 Cromosoma: Los genes son la ubicación x/y y orientación de cada patrón, como un arreglo de tuplas
+
 Función de aptitud: Da un puntaje respecto a varios factores con diferentes pesos:
 *  Lo compacto que quedan los patrones
 *  Distancias entre patrones
@@ -22,16 +24,16 @@ Función de aptitud: Da un puntaje respecto a varios factores con diferentes pes
 Tipo de selección: Por torneo
 
 Valores iniciales del algoritmo:
- * Población inicial(100)
- * Generaciones(200)
- * Frecuencia de mutación en x(0.3)
- * Frecuencia de mutación en y(0.99)
- * Escala de mutación en x(200)
- * Escala de mutación positiva en y(1)
- * Escala de mutación negativa en y(500)
- * Frecuencia de mutación de orientación(0.15)
- * Tamaño del torneo(10)
- * Probabilidad de cruzamiento(0.9)
+ * Población inicial (100)
+ * Generaciones (200)
+ * Frecuencia de mutación en x (0.3)
+ * Frecuencia de mutación en y (0.99)
+ * Escala de mutación en x (200)
+ * Escala de mutación positiva en y (1)
+ * Escala de mutación negativa en y (500)
+ * Frecuencia de mutación de orientación (0.15)
+ * Tamaño del torneo (10)
+ * Probabilidad de cruzamiento (0.9)
    
 Notas de la mutación:
 *  La escala de mutación negativa en y es proporcional a la distancia del patrón a la base del lienzo, con el propósito de acelerar la búsqueda de soluciones
