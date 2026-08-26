@@ -1,4 +1,4 @@
-﻿import copy
+﻿from math import hypot
 from functools import lru_cache
 import matplotlib.pyplot as plt
 import shapely.plotting
@@ -17,9 +17,22 @@ def _polygon_properties(polygon):
     return minx, miny, maxx, maxy, center.x, center.y
 
 
-def create_margin_rectangle(polygons_file="polygons.json", width=900, offset=5):
-    """Create and return a rectangle polygon with width 900 and length equal to the sum of margin polygon lengths."""
-    _, margin_polygons = polyorder.load_active_polygon_sets(polygons_file, offset=offset)
+def load_margin_polygons(patterns_file="patrones.json"):
+    """Load margin geometries saved in the patterns file."""
+    patterns = polyorder.load_patrones_from_file(patterns_file)
+    return [
+        {
+            "name": pattern["margen"]["name"],
+            "polygon": Polygon(pattern["margen"]["coordinates"]),
+            "simetrico": pattern["margen"].get("simetrico", False),
+        }
+        for pattern in patterns
+    ]
+
+
+def create_margin_rectangle(patterns_file="patrones.json", width=900):
+    """Create a rectangle whose height is based on saved margin geometries."""
+    margin_polygons = load_margin_polygons(patterns_file)
     total_length = sum(entry["polygon"].length for entry in margin_polygons)
     return Polygon([(0, 0), (width, 0), (width, total_length), (0, total_length)])
 
@@ -143,12 +156,22 @@ def _move_margin_entry(entry):
 def _placement_is_valid(candidate, placed, x_bounds, y_bounds):
     """Check a candidate without recalculating the complete individual score."""
     candidate_poly, candidate_bounds = _move_margin_entry(candidate)
+    placed_data = [_move_margin_entry(entry) for entry in placed]
+    return _placement_is_valid_moved(
+        candidate_poly, candidate_bounds, placed_data, x_bounds, y_bounds
+    )
+
+
+def _placement_is_valid_moved(candidate_poly, candidate_bounds, placed_data,
+                              x_bounds, y_bounds, excluded_index=None):
+    """Check a moved candidate against already translated polygons."""
     min_x, min_y, max_x, max_y = candidate_bounds
     if min_x < x_bounds[0] or min_y < y_bounds[0] or max_x > x_bounds[1] or max_y > y_bounds[1]:
         return False
 
-    for entry in placed:
-        placed_poly, placed_bounds = _move_margin_entry(entry)
+    for index, (placed_poly, placed_bounds) in enumerate(placed_data):
+        if index == excluded_index:
+            continue
         if (
             candidate_bounds[2] < placed_bounds[0]
             or placed_bounds[2] < candidate_bounds[0]
@@ -163,7 +186,11 @@ def _placement_is_valid(candidate, placed, x_bounds, y_bounds):
 
 def _individual_max_y(individual):
     """Return the highest translated boundary of an individual."""
-    return max(_move_margin_entry(entry)[1][3] for entry in individual)
+    max_y = float("-inf")
+    for entry in individual:
+        properties = _polygon_properties(entry["polygon"])
+        max_y = max(max_y, properties[3] + entry["y"] - properties[5])
+    return max_y
 
 
 def create_margin_population(size, margin_polygons, x_bounds, y_bounds, max_individual_attempts=500, max_placement_attempts=200):
@@ -172,6 +199,7 @@ def create_margin_population(size, margin_polygons, x_bounds, y_bounds, max_indi
     for _ in range(size):
         for _ in range(max_individual_attempts):
             individual = []
+            placed_data = []
             valid = True
             for entry in margin_polygons:
                 polygon = entry.get("polygon")
@@ -187,8 +215,12 @@ def create_margin_population(size, margin_polygons, x_bounds, y_bounds, max_indi
                     t = random.random()
                     y = min_y + (t * t) * (max_y - min_y)
                     candidate = {"name": name, "polygon": polygon, "x": x, "y": y}
-                    if _placement_is_valid(candidate, individual, x_bounds, y_bounds):
+                    candidate_poly, candidate_bounds = _move_margin_entry(candidate)
+                    if _placement_is_valid_moved(
+                        candidate_poly, candidate_bounds, placed_data, x_bounds, y_bounds
+                    ):
                         individual.append(candidate)
+                        placed_data.append((candidate_poly, candidate_bounds))
                         placement_found = True
                         break
 
@@ -252,11 +284,11 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
     """
     mutated = []
     y_max = max(y_bounds[1], 1.0)
+    moved_individual = [_move_margin_entry(gene) for gene in individual]
     for index, gene in enumerate(individual):
         new_x = gene["x"]
         new_y = gene["y"]
         polygon = gene.get("polygon")
-        other_genes = individual[:index] + individual[index + 1:]
         min_x, max_x, min_y, _ = get_margin_position_bounds(
             polygon, x_bounds, y_bounds
         )
@@ -268,7 +300,11 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
                 "x": proposed_x,
                 "y": new_y,
             }
-            if _placement_is_valid(proposed_gene, other_genes, x_bounds, y_bounds):
+            proposed_poly, proposed_bounds = _move_margin_entry(proposed_gene)
+            if _placement_is_valid_moved(
+                proposed_poly, proposed_bounds, moved_individual, x_bounds, y_bounds,
+                excluded_index=index,
+            ):
                 new_x = proposed_x
         if random.random() < mutation_rate_y:
             downward_space = max(new_y - min_y, 0.0)
@@ -283,7 +319,11 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
                     "x": new_x,
                     "y": proposed_y,
                 }
-                if _placement_is_valid(proposed_gene, other_genes, x_bounds, y_bounds):
+                proposed_poly, proposed_bounds = _move_margin_entry(proposed_gene)
+                if _placement_is_valid_moved(
+                    proposed_poly, proposed_bounds, moved_individual, x_bounds, y_bounds,
+                    excluded_index=index,
+                ):
                     new_y = proposed_y
             else:
                 left_space = max(new_x - min_x, 0.0)
@@ -304,7 +344,11 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
                         "x": proposed_x,
                         "y": new_y,
                     }
-                    if _placement_is_valid(proposed_gene, other_genes, x_bounds, y_bounds):
+                    proposed_poly, proposed_bounds = _move_margin_entry(proposed_gene)
+                    if _placement_is_valid_moved(
+                        proposed_poly, proposed_bounds, moved_individual, x_bounds, y_bounds,
+                        excluded_index=index,
+                    ):
                         new_x = proposed_x
         if polygon is not None and random.random() < mutation_rate_flip:
             cx, cy = polygon.centroid.x, polygon.centroid.y
@@ -336,8 +380,8 @@ def score_margin_positions(margin_params, x_bounds, y_bounds):
     for entry in margin_params:
         moved, bounds = _move_margin_entry(entry)
         moved_polygons.append(moved)
-        centers.append((entry["x"], entry["y"]))
         moved_bounds.append(bounds)
+        centers.append((entry["x"], entry["y"]))
 
     for minx, miny, maxx, maxy in moved_bounds:
         if minx < x_bounds[0] or miny < y_bounds[0] or maxx > x_bounds[1] or maxy > y_bounds[1]:
@@ -359,14 +403,20 @@ def score_margin_positions(margin_params, x_bounds, y_bounds):
                 or bounds_a[3] < bounds_b[1]
                 or bounds_b[3] < bounds_a[1]
             )
-            if not boxes_are_separate and poly_a.intersects(poly_b):
-                if poly_a.intersection(poly_b).area > 1e-8:
+            if not boxes_are_separate:
+                intersection = poly_a.intersection(poly_b)
+                if intersection.area > 1e-8:
                     return -30000000000
-                touch_pair_count += 1
+                if not intersection.is_empty:
+                    touch_pair_count += 1
 
-            gap = poly_a.distance(poly_b)
-            nearest_gaps[i] = min(nearest_gaps[i], gap)
-            nearest_gaps[j] = min(nearest_gaps[j], gap)
+            bbox_dx = max(bounds_b[0] - bounds_a[2], bounds_a[0] - bounds_b[2], 0.0)
+            bbox_dy = max(bounds_b[1] - bounds_a[3], bounds_a[1] - bounds_b[3], 0.0)
+            bbox_gap = hypot(bbox_dx, bbox_dy)
+            if bbox_gap < nearest_gaps[i] or bbox_gap < nearest_gaps[j]:
+                gap = poly_a.distance(poly_b)
+                nearest_gaps[i] = min(nearest_gaps[i], gap)
+                nearest_gaps[j] = min(nearest_gaps[j], gap)
 
             dx = centers[i][0] - centers[j][0]
             dy = centers[i][1] - centers[j][1]
@@ -413,6 +463,11 @@ def score_margin_positions(margin_params, x_bounds, y_bounds):
     return score
 
 
+def _copy_individual(individual):
+    """Copy placement records while reusing immutable polygon geometries."""
+    return [gene.copy() for gene in individual]
+
+
 def selection(population, fitnesses, tournament_size):
     """Select parents via tournament selection and return deep copies of winners.
 
@@ -420,10 +475,11 @@ def selection(population, fitnesses, tournament_size):
     margin parameter dictionaries.
     """
     selected = []
+    candidates = list(zip(population, fitnesses))
     for _ in range(len(population)):
-        tournament = random.sample(list(zip(population, fitnesses)), tournament_size)
+        tournament = random.sample(candidates, tournament_size)
         winner = max(tournament, key=lambda x: x[1])[0]
-        selected.append(copy.deepcopy(winner))
+        selected.append(_copy_individual(winner))
     return selected
 
 
@@ -509,27 +565,26 @@ def genetic_algorithm_margin_placement(margin_polygons,
     for generation in range(generations):
         fitnesses = [score_margin_positions(ind, x_bounds, y_bounds) for ind in population]
 
-        # Diversity metrics
-        metrics = compute_diversity_metrics(population, fitnesses)
+        unique_fitness_count = len(set(fitnesses))
         gen_best_idx = max(range(len(fitnesses)), key=lambda i: fitnesses[i])
         if fitnesses[gen_best_idx] > best_fitness:
             best_fitness = fitnesses[gen_best_idx]
-            best_individual = copy.deepcopy(population[gen_best_idx])
+            best_individual = _copy_individual(population[gen_best_idx])
             stagnation_generations = 0
         else:
             stagnation_generations += 1
         
         print(f"Generation {generation}: best_fitness = {best_fitness} | "
-              f"uniq_fit={metrics['unique_fitness_count']} "
+              f"uniq_fit={unique_fitness_count} "
               f"maxy={_individual_max_y(best_individual):.2f} "
-              f"avg_dist={metrics['avg_pairwise_distance']:.2f}")
+              f"avg_dist=skipped")
 
         if best_individual is not None and (
             generation == 0
             or (generation & (generation - 1)) == 0
             or generation == generations - 1
         ):
-            snapshots.append((generation, copy.deepcopy(best_individual)))
+            snapshots.append((generation, _copy_individual(best_individual)))
         
         parents = selection(population, fitnesses, tournament_size)
         # Shuffle parents to avoid deterministic pairing of identical parents
@@ -541,16 +596,16 @@ def genetic_algorithm_margin_placement(margin_polygons,
                 child1, child2 = crossover_margin_individuals(parents[i], parents[i+1])
                 offspring.extend([child1, child2])
             else:
-                offspring.append(copy.deepcopy(parents[i]))
+                offspring.append(_copy_individual(parents[i]))
                 if i + 1 < len(parents):
-                    offspring.append(copy.deepcopy(parents[i+1]))
+                    offspring.append(_copy_individual(parents[i+1]))
         
         # Elitism: keep the top 3 individuals unmutated (or fewer if population is small)
         elite_count = min(3, population_size)
         # find top elite_count indices by fitness
         sorted_idx = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
         elite_idx = sorted_idx[:elite_count]
-        elites = [copy.deepcopy(population[i]) for i in elite_idx]
+        elites = [_copy_individual(population[i]) for i in elite_idx]
 
         num_to_mutate = population_size - len(elites)
         restart = stagnation_generations >= stagnation_limit
@@ -576,11 +631,10 @@ def genetic_algorithm_margin_placement(margin_polygons,
 
 
 if __name__ == "__main__":
-    # Let user enter and see polygons
-    _, margin_polygons = polyorder.load_active_polygon_sets("polygons.json", offset=5)
+    margin_polygons = load_margin_polygons("patrones.json")
     
     # Create rectangle
-    rectangle = create_margin_rectangle("polygons.json", width=900, offset=5)
+    rectangle = create_margin_rectangle("patrones.json", width=900)
     
     # Extract bounds
     maxy = rectangle.bounds[3]
@@ -590,7 +644,7 @@ if __name__ == "__main__":
     
     # GA parameters
     population_size = 100
-    generations = 101
+    generations = 200
     # Independent mutation rates and scales for x and y
     mutation_rate_x = 0.3
     mutation_rate_y = 0.99
