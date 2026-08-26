@@ -73,7 +73,7 @@ def plot_margin_individual(individual, width=900, title=None):
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlim(-50, width + 50)
     ax.set_ylim(-50, max_y + 50)
-    plt.title(title or "Margin Polygon Placement")
+    plt.title(title or "Posicionamiento de Polígonos de Margen")
     plt.xlabel("X")
     plt.ylabel("Y")
     plt.show()

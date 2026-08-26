@@ -66,15 +66,15 @@ def load_polygons_from_file(filename):
 
 def prompt_polygon_from_user(default_name=None):
     """Prompt the user for a polygon name and vertices."""
-    name = input(f"Polygon name [{default_name or 'polygon'}]: ").strip()
+    name = input(f"Nombre del polígono [{default_name or 'polygon'}]: ").strip()
     if not name:
         name = default_name or "polygon"
 
-    print("Enter polygon vertices as x,y pairs. Enter a blank line when finished.")
+    print("Ingresar los vértices del polígono como x,y. Presionar Enter sin escribir nada para terminar.")
     vertices = []
 
     while True:
-        line = input("Vertex (x,y): ").strip()
+        line = input("Vértice (x,y): ").strip()
         if not line:
             break
         try:
@@ -83,14 +83,14 @@ def prompt_polygon_from_user(default_name=None):
             y = float(y_str.strip())
             vertices.append((x, y))
         except ValueError:
-            print("Invalid format. Use x,y (for example: 1,2).")
+            print("Formato inválido. Usar x,y (por ejemplo: 1,2).")
 
     if len(vertices) < 3:
-        print("A polygon needs at least 3 vertices. Try again.")
+        print("Un polígono necesita al menos 3 vértices. Intentar de nuevo.")
         return None
 
-    sim_input = input("Simetrico? [y/N]: ").strip().lower()
-    sim_flag = sim_input in ("y", "yes")
+    sim_input = input("¿Simétrico? [s/N]: ").strip().lower()
+    sim_flag = sim_input in ("s", "si")
 
     return {"name": name, "polygon": Polygon(vertices), "simetrico": sim_flag}
 
@@ -107,8 +107,8 @@ def prompt_polygons():
         if not polygons:
             continue
 
-        add_more = input("Add another polygon? [y/N]: ").strip().lower()
-        if add_more not in ("y", "yes"):
+        add_more = input("¿Agregar otro polígono? [s/N]: ").strip().lower()
+        if add_more not in ("s", "si"):
             break
 
     return polygons
@@ -139,12 +139,12 @@ if __name__ == "__main__":
         (5, 5),
     ]), "simetrico": False}
 
-    use_manual = input("Enter polygons manually? [y/N]: ").strip().lower() in ("y", "yes")
+    use_manual = input("¿Ingresar los polígonos manualmente? [s/N]: ").strip().lower() in ("s", "si")
     if use_manual:
         polygons = prompt_polygons()
         if not polygons:
             polygons = [default_polygon]
-            print("No valid polygon entered; using default polygon.")
+            print("No se ingresó ningún polígono válido; usando el polígono predeterminado.")
     else:
         polygons = [default_polygon]
 

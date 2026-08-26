@@ -35,14 +35,14 @@ def load_polygons_from_file(filename):
 
 
 def prompt_polygon_selection(polygons):
-    print("Available polygons in polygons.json:")
+    print("Polígonos disponibles en polygons.json:")
     for index, entry in enumerate(polygons, start=1):
         center = entry["polygon"].centroid
-        print(f"{index}: {entry['name']} (center={center.x:.2f},{center.y:.2f})")
+        print(f"{index}: {entry['name']} (centro={center.x:.2f},{center.y:.2f})")
 
     while True:
-        selection = input("Enter polygon numbers to add (comma-separated), or 'all': ").strip().lower()
-        if selection == "all":
+        selection = input("Ingresar los números de polígonos a agregar (separados por coma), o 'todo': ").strip().lower()
+        if selection == "todo":
             return list(range(len(polygons)))
 
         try:
@@ -51,14 +51,14 @@ def prompt_polygon_selection(polygons):
                 raise ValueError
             return sorted(set(indices))
         except ValueError:
-            print("Invalid selection. Use numbers like 1,2 or 'all'.")
+            print("Selección inválida. Usar números como 1,2 o 'todo'.")
 
 
 def prompt_copy_counts(selected_entries):
     copy_counts = []
     for entry in selected_entries:
         while True:
-            count_str = input(f"How many copies of '{entry['name']}'? (simetrico={entry.get('simetrico', False)}) ").strip()
+            count_str = input(f"¿Cuántas copias de '{entry['name']}'? (simétrico={entry.get('simetrico', False)}) ").strip()
             try:
                 count = int(count_str)
                 if count < 1:
@@ -66,7 +66,7 @@ def prompt_copy_counts(selected_entries):
                 copy_counts.append(count)
                 break
             except ValueError:
-                print("Enter a positive integer.")
+                print("Ingresar un número entero positivo.")
     return copy_counts
 
 
@@ -75,8 +75,8 @@ def prompt_simetrico_flags(selected_entries):
     sim_flags = []
     for entry in selected_entries:
         default = entry.get("simetrico", False)
-        resp = input(f"Set simetrico for '{entry['name']}'? [y/N] (current={default}): ").strip().lower()
-        if resp in ("y", "yes"):
+        resp = input(f"¿Configurar '{entry['name']}' como simétrico? [s/N] (actual={default}): ").strip().lower()
+        if resp in ("s", "si"):
             sim_flags.append(True)
         elif resp in ("n", "no"):
             sim_flags.append(False)
