@@ -214,7 +214,13 @@ def create_margin_population(size, margin_polygons, x_bounds, y_bounds, max_indi
                     x = random.uniform(min_x, max_x)
                     t = random.random()
                     y = min_y + (t * t) * (max_y - min_y)
-                    candidate = {"name": name, "polygon": polygon, "x": x, "y": y}
+                    candidate = {
+                        "name": name,
+                        "polygon": polygon,
+                        "x": x,
+                        "y": y,
+                        "flipped": False,
+                    }
                     candidate_poly, candidate_bounds = _move_margin_entry(candidate)
                     if _placement_is_valid_moved(
                         candidate_poly, candidate_bounds, placed_data, x_bounds, y_bounds
@@ -263,9 +269,22 @@ def crossover_margin_individuals(parent1, parent2, alpha=None):
         x2 = alpha * gene2["x"] + (1 - alpha) * gene1["x"]
         y2 = alpha * gene2["y"] + (1 - alpha) * gene1["y"]
 
-        polygon = gene1.get("polygon") or gene2.get("polygon")
-        child1.append({"name": gene1.get("name"), "polygon": polygon, "x": x1, "y": y1})
-        child2.append({"name": gene1.get("name"), "polygon": polygon, "x": x2, "y": y2})
+        polygon1 = gene1.get("polygon") or gene2.get("polygon")
+        polygon2 = gene2.get("polygon") or gene1.get("polygon")
+        child1.append({
+            "name": gene1.get("name"),
+            "polygon": polygon1,
+            "x": x1,
+            "y": y1,
+            "flipped": gene1.get("flipped", False),
+        })
+        child2.append({
+            "name": gene2.get("name"),
+            "polygon": polygon2,
+            "x": x2,
+            "y": y2,
+            "flipped": gene2.get("flipped", False),
+        })
 
     return child1, child2
 
@@ -289,6 +308,7 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
         new_x = gene["x"]
         new_y = gene["y"]
         polygon = gene.get("polygon")
+        flipped = gene.get("flipped", False)
         min_x, max_x, min_y, _ = get_margin_position_bounds(
             polygon, x_bounds, y_bounds
         )
@@ -357,12 +377,14 @@ def mutate_margin_individual(individual, mutation_rate_x, mutation_rate_y,
                 polygon = scale(polygon, xfact=-1, yfact=1, origin=(cx, cy))
             else:
                 polygon = scale(polygon, xfact=1, yfact=-1, origin=(cx, cy))
+            flipped = not flipped
 
         mutated.append({
             "name": gene.get("name"),
             "polygon": polygon,
             "x": new_x,
             "y": new_y,
+            "flipped": flipped,
         })
     return mutated
 
@@ -683,7 +705,8 @@ if __name__ == "__main__":
             "name": entry.get("name"),
             "x": float(entry.get("x")),
             "y": float(entry.get("y")),
-            "simetrico": entry.get("polygon").is_ring if entry.get("polygon") else False,
+            "simetrico": entry.get("simetrico", False),
+            "flipped": entry.get("flipped", False),
         })
     
     with open("best_individual.json", "w", encoding="utf-8") as f:

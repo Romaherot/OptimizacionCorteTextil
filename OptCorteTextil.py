@@ -1,5 +1,6 @@
 """Main workflow for creating, ordering, and optimizing textile patterns."""
 
+import json
 from pathlib import Path
 
 from shapely.geometry import Polygon
@@ -98,6 +99,27 @@ def send_to_canvas(patterns_file=PATTERNS_FILE):
 	)
 
 	print(f"Mejor fitness: {best_fitness}")
+	
+	# Save best individual to JSON
+	best_individual_data = []
+	for entry in best_individual:
+		best_individual_data.append({
+			"name": entry.get("name"),
+			"x": float(entry.get("x")),
+			"y": float(entry.get("y")),
+			"simetrico": entry.get("simetrico", False),
+			"flipped": entry.get("flipped", False),
+		})
+	
+	with open("best_individual.json", "w", encoding="utf-8") as f:
+		json.dump({
+			"fitness": best_fitness,
+			"max_y": float(algorpatronsnap._individual_max_y(best_individual)),
+			"placements": best_individual_data,
+		}, f, indent=2, ensure_ascii=False)
+	
+	print("Mejor individual guardado en best_individual.json")
+	
 	algorpatronsnap.plot_margin_individual(
 		best_individual,
 		width=CANVAS_WIDTH,
